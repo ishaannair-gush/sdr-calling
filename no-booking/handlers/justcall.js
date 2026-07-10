@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { logAdd, CAMPAIGN_NAMES } = require('../../lib/adds-log');
 
 const CAMPAIGN_ALL   = '3085672';
 const CAMPAIGN_RETIRE = '3085673';
@@ -54,6 +55,13 @@ async function addToCampaign(lead, campaignId) {
   }
 
   console.log(`Added to JustCall campaign ${campaignId}`);
+  // Fire-and-forget: dashboard add-counts; never blocks or fails the add.
+  logAdd({
+    campaignId,
+    campaignName: CAMPAIGN_NAMES[String(campaignId)] || '',
+    email: validEmail,
+    phone: phoneNumber,
+  });
 }
 
 async function addToJustCall(lead) {

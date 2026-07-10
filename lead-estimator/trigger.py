@@ -302,10 +302,39 @@ def add_to_campaign(name: str, phone: str, email: str) -> bool:
             return False
         resp.raise_for_status()
         print(f"  [JUSTCALL] Added: {e164}")
+        log_add(os.environ["JUSTCALL_CAMPAIGN_ID"], email, e164)
         return True
     except Exception as e:
         print(f"  [JUSTCALL ERROR] {e}")
         return False
+
+
+def log_add(campaign_id: str, email: str, phone: str):
+    """Append the add to the 'SDR Adds Log' tab of the dashboard sheet.
+    Best-effort only — never raises into the add path."""
+    try:
+        sheet_id = os.environ.get("GOOGLE_SHEETS_ID")
+        if not sheet_id:
+            return
+        creds = service_account.Credentials.from_service_account_file(
+            str(CREDS_FILE),
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        svc = build("sheets", "v4", credentials=creds)
+        svc.spreadsheets().values().append(
+            spreadsheetId=sheet_id,
+            range="SDR Adds Log!A:E",
+            valueInputOption="RAW",
+            body={"values": [[
+                datetime.now(timezone.utc).isoformat(),
+                str(campaign_id),
+                "Lead Estimator",
+                email or "",
+                phone or "",
+            ]]},
+        ).execute()
+    except Exception as e:
+        print(f"  [ADDS-LOG WARN] {e}")
 
 
 # ── Workflow ───────────────────────────────────────────────────────────────────

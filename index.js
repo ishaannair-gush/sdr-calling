@@ -73,8 +73,10 @@ function startLeadEstimator() {
 }
 startLeadEstimator();
 
-// ── Health endpoint ───────────────────────────────────────────────────────────
+// ── Health endpoint + dashboard ───────────────────────────────────────────────
+const { dashboardHandler } = require('./lib/dashboard');
 const app = express();
+app.get('/', dashboardHandler);
 app.get('/health', (_req, res) => res.json({ ok: true, running }));
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`[scheduler] SDR Calling up on :${port} — nurture 15m, form-leads 30m, noshow daily 7am ET, lead-estimator 60s poll`));
