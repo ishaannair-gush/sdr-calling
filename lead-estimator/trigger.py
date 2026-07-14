@@ -56,16 +56,71 @@ def fetch_rows(service):
 
 
 # ── State helpers ──────────────────────────────────────────────────────────────
+# The container filesystem is wiped on every deploy, so the local state file is
+# only a cache. The durable copy lives in the dashboard spreadsheet (tab
+# "LE State", cell B2) — without it, every deploy skipped all rows that arrived
+# since the previous run.
+STATE_TAB = "LE State"
+
+
+def _state_sheet_service():
+    creds = service_account.Credentials.from_service_account_file(
+        str(CREDS_FILE),
+        scopes=["https://www.googleapis.com/auth/spreadsheets"],
+    )
+    return build("sheets", "v4", credentials=creds)
+
+
 def load_state():
     if STATE_FILE.exists():
         return json.loads(STATE_FILE.read_text())
-    # No state yet (fresh deploy): last_seen_count=None makes the main loop
-    # bootstrap from the current sheet size instead of re-processing history.
+    sheet_id = os.environ.get("GOOGLE_SHEETS_ID")
+    if sheet_id:
+        try:
+            svc = _state_sheet_service()
+            result = svc.spreadsheets().values().get(
+                spreadsheetId=sheet_id, range=f"'{STATE_TAB}'!A2:B2"
+            ).execute()
+            row = (result.get("values") or [[]])[0]
+            if len(row) >= 2 and str(row[1]).isdigit():
+                print(f"[state] restored from sheet: last_seen_count={row[1]}")
+                state = {"last_seen_count": int(row[1]), "last_run": row[0]}
+                STATE_FILE.write_text(json.dumps(state, indent=2))  # cache for the 60s loop
+                return state
+        except Exception as e:
+            print(f"[state] sheet read failed ({e}) — will bootstrap")
+    # No state anywhere (true first run): last_seen_count=None makes the main
+    # loop bootstrap from the current sheet size instead of re-processing history.
     return {"last_seen_count": None, "last_run": None}
 
 
 def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
+    sheet_id = os.environ.get("GOOGLE_SHEETS_ID")
+    if not sheet_id:
+        return
+    try:
+        svc = _state_sheet_service()
+        try:
+            svc.spreadsheets().values().update(
+                spreadsheetId=sheet_id,
+                range=f"'{STATE_TAB}'!A1:B2",
+                valueInputOption="RAW",
+                body={"values": [
+                    ["last_run", "last_seen_count"],
+                    [state["last_run"] or "", state["last_seen_count"]],
+                ]},
+            ).execute()
+        except Exception as e:
+            if "Unable to parse range" not in str(e):
+                raise
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"requests": [{"addSheet": {"properties": {"title": STATE_TAB}}}]},
+            ).execute()
+            save_state(state)
+    except Exception as e:
+        print(f"[state] sheet write failed: {e}")
 
 
 # ── Postgres helpers ───────────────────────────────────────────────────────────
