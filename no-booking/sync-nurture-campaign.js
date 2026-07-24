@@ -3,7 +3,8 @@
  *
  * Every 15 minutes:
  *  1. Checks Postgres for new demo bookings and marks "Demos Booked = yes" on leadform rows.
- *  2. Finds leads that are >= 15 min old, not demo-booked, and not already queued for nurture.
+ *  2. Finds leads that are >= 1 day old, not demo-booked, and not already queued for nurture.
+ *     (1-day gate gives the demo-bookings table time to catch up before we decide a lead is a no-show.)
  *  3. Adds those leads to JustCall campaign #3190752 (Meta_No_Booking).
  *  4. Marks "JC Nurture = yes" on each processed row to prevent re-queuing.
  *
@@ -19,7 +20,7 @@ const { addToCampaign } = require('./handlers/justcall');
 
 const SHEET_ID            = process.env.GOOGLE_SHEETS_ID;
 const NURTURE_CAMPAIGN_ID = '3190752';
-const MIN_AGE_MS          = 15 * 60 * 1000;
+const MIN_AGE_MS          = 24 * 60 * 60 * 1000; // 1 day — gives gist.gtm_inbound_demo_bookings time to catch up
 
 const isBackfill = process.argv.includes('--backfill');
 

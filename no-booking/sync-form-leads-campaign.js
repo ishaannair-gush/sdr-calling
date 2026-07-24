@@ -8,9 +8,15 @@
  * "Meta" is identified by utm_source matching: facebook, fb, meta, ig,
  * instagram, insta, etc.
  *
+ * Leads must be >= 1 day old before they're considered, so the demo-bookings
+ * table has time to catch up — otherwise a lead that actually booked can look
+ * like a no-booking and get added to nurture before the booking lands.
+ * Runs once a day; regular runs look at leads between 1 and 2 days old, so a
+ * single missed run doesn't drop anyone.
+ *
  * Usage:
- *   node sync-form-leads-campaign.js           # process leads from last 2h
- *   node sync-form-leads-campaign.js --backfill # process all historical leads
+ *   node sync-form-leads-campaign.js           # process leads 1-2 days old
+ *   node sync-form-leads-campaign.js --backfill # process all leads >= 1 day old
  */
 
 require('dotenv').config();
@@ -18,7 +24,8 @@ const { Client } = require('pg');
 const { addToCampaign } = require('./handlers/justcall');
 
 const NURTURE_CAMPAIGN_ID = '3190752';
-const LOOKBACK_INTERVAL   = '2 hours';  // window for regular runs
+const MIN_AGE_INTERVAL    = '1 day';   // gate: leads must be at least this old
+const LOOKBACK_INTERVAL   = '24 hours'; // buffer for regular runs (job is daily), so a missed run doesn't lose a lead
 const isBackfill = process.argv.includes('--backfill');
 
 const PG_CONFIG = {
@@ -32,7 +39,13 @@ const PG_CONFIG = {
 };
 
 async function fetchFormLeads(pg) {
-  const timeFilter = isBackfill ? '' : `AND gfl.created_at >= NOW() - INTERVAL '${LOOKBACK_INTERVAL}'`;
+  // Age gate: never consider a lead until it's at least 1 day old (backfill included).
+  const ageGate = `AND gfl.created_at <= NOW() - INTERVAL '${MIN_AGE_INTERVAL}'`;
+  // Regular runs additionally bound the window to leads that just crossed the age
+  // gate since the last run (with buffer), so we're not rescanning all history.
+  const timeFilter = isBackfill
+    ? ''
+    : `AND gfl.created_at >= NOW() - INTERVAL '${MIN_AGE_INTERVAL} ${LOOKBACK_INTERVAL}'`;
 
   const { rows } = await pg.query(`
     SELECT DISTINCT ON (LOWER(TRIM(gfl.email)))
@@ -43,6 +56,7 @@ async function fetchFormLeads(pg) {
     FROM gw_form_leads gfl
     WHERE gfl.phone IS NOT NULL
       AND TRIM(gfl.phone) != ''
+      ${ageGate}
       AND (
         LOWER(gfl.utm_source) LIKE '%facebook%'
         OR LOWER(gfl.utm_source) LIKE '%instagram%'
@@ -71,7 +85,7 @@ async function fetchFormLeads(pg) {
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function run() {
-  console.log(`[sync-form-leads] Starting${isBackfill ? ' (backfill mode)' : ` (last ${LOOKBACK_INTERVAL})`}...`);
+  console.log(`[sync-form-leads] Starting${isBackfill ? ' (backfill mode, >= 1 day old)' : ` (1 day to 1 day + ${LOOKBACK_INTERVAL} old)`}...`);
 
   const pg = new Client(PG_CONFIG);
   await pg.connect();
