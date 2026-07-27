@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { logAdd, CAMPAIGN_NAMES } = require('../../lib/adds-log');
 const { logSkip } = require('../../lib/skip-log');
+const { logActivity } = require('../../lib/activity-log');
 
 const CAMPAIGN_ALL   = '3085672';
 const CAMPAIGN_RETIRE = '3085673';
@@ -22,13 +23,17 @@ function isAlreadyInCampaignError(error) {
 async function addToCampaign(lead, campaignId) {
   const rawPhone = (lead.phone || lead.phone_number || lead.user_provided_phone_number || '').trim();
   if (!rawPhone) {
-    logSkip({ campaignId, campaignName: CAMPAIGN_NAMES[String(campaignId)] || '', email: lead.email, reason: 'Missing phone number' });
+    const reason = 'Missing phone number';
+    await logSkip({ campaignId, campaignName: CAMPAIGN_NAMES[String(campaignId)] || '', email: lead.email, reason });
+    await logActivity({ campaignId, campaignName: CAMPAIGN_NAMES[String(campaignId)] || '', eventType: 'skipped', email: lead.email, reason });
     throw new Error('Lead phone is missing');
   }
 
   const digits = rawPhone.replace(/\D/g, '');
   if (digits.length < 7) {
-    logSkip({ campaignId, campaignName: CAMPAIGN_NAMES[String(campaignId)] || '', email: lead.email, phone: rawPhone, reason: `Invalid phone: "${rawPhone}"` });
+    const reason = `Invalid phone: "${rawPhone}"`;
+    await logSkip({ campaignId, campaignName: CAMPAIGN_NAMES[String(campaignId)] || '', email: lead.email, phone: rawPhone, reason });
+    await logActivity({ campaignId, campaignName: CAMPAIGN_NAMES[String(campaignId)] || '', eventType: 'skipped', email: lead.email, phone: rawPhone, reason });
     throw new Error(`Lead phone too short: "${rawPhone}"`);
   }
   const phoneNumber = digits.length === 10 ? `+1${digits}` : `+${digits}`;
@@ -52,17 +57,28 @@ async function addToCampaign(lead, campaignId) {
   } catch (error) {
     if (isAlreadyInCampaignError(error)) {
       console.log(`Already in JustCall campaign ${campaignId}: ${phoneNumber}`);
-      logSkip({ campaignId, campaignName: CAMPAIGN_NAMES[String(campaignId)] || '', email: validEmail, phone: phoneNumber, reason: 'Already in JustCall campaign' });
+      const reason = 'Already in JustCall campaign';
+      await logSkip({ campaignId, campaignName: CAMPAIGN_NAMES[String(campaignId)] || '', email: validEmail, phone: phoneNumber, reason });
+      await logActivity({ campaignId, campaignName: CAMPAIGN_NAMES[String(campaignId)] || '', eventType: 'skipped', email: validEmail, phone: phoneNumber, reason });
       return;
     }
     throw error;
   }
 
   console.log(`Added to JustCall campaign ${campaignId}`);
-  // Fire-and-forget: dashboard add-counts; never blocks or fails the add.
-  logAdd({
+  // Awaited (not fire-and-forget): logAdd swallows its own errors and never
+  // fails the add, but the caller's process can exit right after this
+  // function returns, and an un-awaited Sheets write was getting dropped.
+  await logAdd({
     campaignId,
     campaignName: CAMPAIGN_NAMES[String(campaignId)] || '',
+    email: validEmail,
+    phone: phoneNumber,
+  });
+  await logActivity({
+    campaignId,
+    campaignName: CAMPAIGN_NAMES[String(campaignId)] || '',
+    eventType: 'added',
     email: validEmail,
     phone: phoneNumber,
   });
