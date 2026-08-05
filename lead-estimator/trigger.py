@@ -209,29 +209,34 @@ def enrich_location(email: str) -> dict:
     state, country, street address, and postal code.
     Falls back to empty strings if not found.
     """
-    try:
-        resp = requests.post(
-            "https://api.leadmagic.io/email-validate",
-            headers=_leadmagic_headers(),
-            json={"email": email},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        loc  = data.get("company_location") or {}
-        return {
-            "city":           loc.get("locality", ""),
-            "state":          loc.get("region", ""),
-            "country":        loc.get("country", ""),
-            "street_address": loc.get("street_address", ""),
-            "postal_code":    loc.get("postal_code", ""),
-            "company_name":   data.get("company_name", ""),
-            "company_size":   data.get("company_size", ""),
-            "company_linkedin": data.get("company_linkedin_url", ""),
-        }
-    except Exception as e:
-        print(f"  [LEADMAGIC LOC ERROR] {email}: {e}")
-        return {"city": "", "state": "", "country": "", "street_address": "", "postal_code": ""}
+    last_err = None
+    for attempt in range(3):  # timeouts here used to discard good US leads as "Non-US"
+        try:
+            resp = requests.post(
+                "https://api.leadmagic.io/email-validate",
+                headers=_leadmagic_headers(),
+                json={"email": email},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            loc  = data.get("company_location") or {}
+            # API fields can be present-but-null, so `or ""` every value
+            return {
+                "city":           loc.get("locality") or "",
+                "state":          loc.get("region") or "",
+                "country":        loc.get("country") or "",
+                "street_address": loc.get("street_address") or "",
+                "postal_code":    loc.get("postal_code") or "",
+                "company_name":   data.get("company_name") or "",
+                "company_size":   data.get("company_size") or "",
+                "company_linkedin": data.get("company_linkedin_url") or "",
+            }
+        except Exception as e:
+            last_err = e
+            time.sleep(2)
+    print(f"  [LEADMAGIC LOC ERROR] {email}: {last_err}")
+    return {"city": "", "state": "", "country": "", "street_address": "", "postal_code": ""}
 
 
 # ── Phone enrichment (Apollo → FullEnrich bulk) ───────────────────────────────
@@ -338,6 +343,7 @@ def add_to_campaign(name: str, phone: str, email: str) -> bool:
         e164 = f"+{digits}"
     else:
         print(f"  [JUSTCALL] Non-US phone, skipping: {phone}")
+        log_skip(email, "Non-US phone number", phone)
         return False
     payload = {
         "campaign_id": os.environ["JUSTCALL_CAMPAIGN_ID"],
@@ -354,6 +360,7 @@ def add_to_campaign(name: str, phone: str, email: str) -> bool:
         )
         if resp.status_code == 400 and "already exists" in resp.text.lower():
             print(f"  [JUSTCALL] Already in campaign: {e164}")
+            log_skip(email, "Already in JustCall campaign", e164)
             return False
         resp.raise_for_status()
         print(f"  [JUSTCALL] Added: {e164}")
@@ -392,6 +399,35 @@ def log_add(campaign_id: str, email: str, phone: str):
         print(f"  [ADDS-LOG WARN] {e}")
 
 
+def log_skip(email: str, reason: str, phone: str = ""):
+    """Append a not-added lead to the 'SDR Skip Log' tab, with why.
+    Best-effort only — never raises into the caller."""
+    try:
+        sheet_id = os.environ.get("GOOGLE_SHEETS_ID")
+        if not sheet_id:
+            return
+        creds = service_account.Credentials.from_service_account_file(
+            str(CREDS_FILE),
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        svc = build("sheets", "v4", credentials=creds)
+        svc.spreadsheets().values().append(
+            spreadsheetId=sheet_id,
+            range="SDR Skip Log!A:F",
+            valueInputOption="RAW",
+            body={"values": [[
+                datetime.now(timezone.utc).isoformat(),
+                os.environ.get("JUSTCALL_CAMPAIGN_ID", ""),
+                "Lead Estimator",
+                email or "",
+                phone or "",
+                reason or "",
+            ]]},
+        ).execute()
+    except Exception as e:
+        print(f"  [SKIP-LOG WARN] {e}")
+
+
 # ── Workflow ───────────────────────────────────────────────────────────────────
 def process_row(row: dict):
     email   = row.get("Email ID", "").strip()
@@ -399,21 +435,25 @@ def process_row(row: dict):
 
     if is_junk_email(email):
         print(f"[SKIP] Internal/test email — {email}")
+        log_skip(email, "Internal/test email")
         return
 
     if is_free_email(email):
         print(f"[SKIP] Free email — {email}")
+        log_skip(email, "Personal/free email domain")
         return
 
     if already_booked(email, website):
         print(f"[SKIP] Already booked — {email} | {website}")
+        log_skip(email, "Already has a demo booking")
         return
 
     domain   = normalize_domain(website)
     location = enrich_location(email)
 
-    if location.get("country", "").lower() not in ("united states", "us", "usa"):
+    if (location.get("country") or "").lower() not in ("united states", "us", "usa"):
         print(f"[SKIP] Non-US location ({location.get('country') or 'unknown'}) — {email}")
+        log_skip(email, f"Non-US location ({location.get('country') or 'unknown'})")
         return
 
     phone = enrich_phone(email, domain)
@@ -426,6 +466,7 @@ def process_row(row: dict):
         add_to_campaign(name=name, phone=phone, email=email)
     else:
         print(f"  [SKIP CAMPAIGN] No phone found for {email}")
+        log_skip(email, "No phone number found (enrichment failed)")
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
@@ -451,7 +492,13 @@ def run():
                 new_rows = rows[last_count:]
                 print(f"[{datetime.now()}] {len(new_rows)} new row(s) detected")
                 for row in new_rows:
-                    process_row(row)
+                    # One bad row must not abort the batch: an uncaught error
+                    # here skips save_state, so the same rows retry every tick
+                    # (with paid enrichment calls) and the poller never advances.
+                    try:
+                        process_row(row)
+                    except Exception as e:
+                        print(f"[ROW ERROR] {row.get('Email ID', '?')}: {e}")
                 state["last_seen_count"] = current_count
                 state["last_run"] = datetime.now(timezone.utc).isoformat()
                 save_state(state)
