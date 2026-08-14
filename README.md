@@ -5,9 +5,14 @@ One Railway service running the three workflows that add contacts to JustCall Sa
 | Workflow | Script | Campaign | Schedule |
 |---|---|---|---|
 | No Show | `no-show/sync-noshow-campaign.js --commit` | #3190746 (Meta_No_Show) | daily 7am ET |
-| No Booking (nurture) | `no-booking/sync-nurture-campaign.js` | #3190752 (Meta_No_Booking) | every 15 min |
-| No Booking (form leads) | `no-booking/sync-form-leads-campaign.js` | #3190752 (Meta_No_Booking) | every 30 min |
+| No Booking | `no-booking/sync-form-leads-campaign.js` | #3190752 (Meta_No_Booking) | daily |
 | Lead Estimator | `lead-estimator/trigger.py` | #3309032 | long-running, polls sheet every 60s |
+
+No Booking sources leads purely from Postgres: `gw_form_leads` (Meta-attributed form
+fills) compared against `gist.gtm_inbound_demo_bookings` — anyone who filled a form
+and never booked qualifies. It used to also pull from a `leadform` Google Sheet fed
+by an external form-lead automation, but that automation stopped writing rows on
+July 14, 2026; the sheet-based script (`sync-nurture-campaign.js`) was retired.
 
 All hit `POST https://api.justcall.io/v2.1/sales_dialer/campaigns/contact`.
 

@@ -1,10 +1,15 @@
 /**
  * SDR Calling — unified scheduler for the three JustCall SalesDialer workflows.
  *
- *  - no-booking/sync-nurture-campaign.js     daily  → campaign #3190752
  *  - no-booking/sync-form-leads-campaign.js  daily  → campaign #3190752
  *  - no-show/sync-noshow-campaign.js         daily 7am ET  → campaign #3190746
  *  - lead-estimator/trigger.py               long-running 60s poller → campaign #3309032
+ *
+ * No Booking used to also run sync-nurture-campaign.js against a "leadform"
+ * Google Sheet fed by an external form-lead automation. That automation died
+ * (last row July 14, 2026) and was retired — No Booking now sources solely
+ * from comparing gw_form_leads against gist.gtm_inbound_demo_bookings in
+ * Postgres (sync-form-leads-campaign.js).
  */
 
 require('dotenv').config();
@@ -34,12 +39,11 @@ function runJob(name, cmd, args, cwd) {
   });
 }
 
-// ── No Booking: nurture + form-leads once a day — both gate on a 1-day-old lead
-//    minimum already, so a daily run gives the demo-bookings table a full day to
-//    catch up before we decide someone is a no-booking (booking 1h after the form
-//    is filled is nowhere near enough to slip through) ───────────────────────────
+// ── No Booking: form-leads once a day — gates on a 1-day-old lead minimum, so
+//    a daily run gives the demo-bookings table a full day to catch up before we
+//    decide someone is a no-booking (booking 1h after the form is filled is
+//    nowhere near enough to slip through) ─────────────────────────────────────
 const NB = path.join(__dirname, 'no-booking');
-setInterval(() => runJob('sync-nurture', process.execPath, [path.join(NB, 'sync-nurture-campaign.js')], NB), 24 * 60 * 60 * 1000);
 setInterval(() => runJob('sync-form-leads', process.execPath, [path.join(NB, 'sync-form-leads-campaign.js')], NB), 24 * 60 * 60 * 1000);
 
 // ── No Show: daily at 7:00 America/New_York ──────────────────────────────────
@@ -83,4 +87,4 @@ app.use('/assets', express.static(path.join(__dirname, 'assets')));
 app.get('/', dashboardHandler);
 app.get('/health', (_req, res) => res.json({ ok: true, running }));
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`[scheduler] SDR Calling up on :${port} — nurture daily, form-leads daily, noshow daily 7am ET, lead-estimator 60s poll`));
+app.listen(port, () => console.log(`[scheduler] SDR Calling up on :${port} — form-leads daily, noshow daily 7am ET, lead-estimator 60s poll`));
