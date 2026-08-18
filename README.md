@@ -4,7 +4,7 @@ One Railway service running the three workflows that add contacts to JustCall Sa
 
 | Workflow | Script | Campaign | Schedule |
 |---|---|---|---|
-| No Show | `no-show/sync-noshow-campaign.js --commit` | #3190746 (Meta_No_Show) | daily 7am ET |
+| No Show | `no-show/sync-noshow-campaign.js --commit` | #3190746 (Meta_No_Show — Meta + Google Ads no-shows) | daily 7am ET |
 | No Booking | `no-booking/sync-form-leads-campaign.js` | #3190752 (Meta_No_Booking) | daily |
 | Lead Estimator | `lead-estimator/trigger.py` | #3309032 | long-running, polls sheet every 60s |
 

@@ -1,8 +1,8 @@
 /**
  * sync-noshow-campaign.js
  *
- * Pulls all Meta-source no-shows from Postgres and adds them to
- * JustCall campaign #3190746 (Meta_No_Show).
+ * Pulls all Meta- and Google Ads-source no-shows from Postgres and adds them
+ * to JustCall campaign #3190746 (Meta_No_Show).
  *
  * Usage:
  *   node sync-noshow-campaign.js            # dry-run preview
@@ -67,6 +67,9 @@ finals AS (
               OR LOWER(source) LIKE '%insta%'
               OR LOWER(source) LIKE '%instra%'
             THEN 'Meta'
+            WHEN LOWER(source) LIKE '%google ads%'
+              OR LOWER(source) LIKE '%google_ads%'
+            THEN 'Google Ads'
             ELSE 'Other'
         END AS source_bucket
     FROM latest_rows
@@ -74,7 +77,7 @@ finals AS (
 SELECT prospect_first_name, prospect_email, prospect_phone_number
 FROM finals
 WHERE show_status = 'N'
-  AND source_bucket = 'Meta'
+  AND source_bucket IN ('Meta', 'Google Ads')
 `;
 
 async function run() {
@@ -85,7 +88,7 @@ async function run() {
   const { rows } = await pg.query(QUERY);
   await pg.end();
 
-  console.log(`[sync-noshow] ${rows.length} Meta no-shows found`);
+  console.log(`[sync-noshow] ${rows.length} Meta/Google Ads no-shows found`);
 
   if (!isCommit) {
     rows.slice(0, 10).forEach(r => console.log(`  → ${r.prospect_first_name || r.prospect_email}`));
